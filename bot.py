@@ -1,85 +1,65 @@
+import requests
+import json
 import tweepy
-import re
-import random
+import schedule
 import time
-import google.generativeai as genai
-from config import API_KEY, API_SECRET, ACCESS_TOKEN, ACCESS_SECRET, GEMINI_API_KEY
+from config import ACCESS_SECRET, Access_Token, API_KEY, API_SECRET, GEMINI_API_KEY
 
-# Twitter API 認証
-auth = tweepy.OAuth1UserHandler(API_KEY, API_SECRET, ACCESS_TOKEN, ACCESS_SECRET)
+# Twitter認証
+auth = tweepy.OAuth1UserHandler(API_KEY, API_SECRET, Access_Token, ACCESS_SECRET)
 api = tweepy.API(auth)
 
-# Google Gemini API 認証
-genai.configure(api_key=GEMINI_API_KEY)
+# Google Gemini API のエンドポイント
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
 
-# ユーザーごとの会話履歴を保存（簡易メモリ）
-conversation_memory = {}
+def generate_gemini_text(prompt):
+    headers = {
+        "Content-Type": "application/json"
+    }
+    params = {
+        "key": GEMINI_API_KEY
+    }
+    data = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ]
+    }
 
-# Gemini API に「占い師っぽい返信」を生成させる関数
-def gemini_fortune_reply(user_input, user_id):
-    if user_id not in conversation_memory:
-        conversation_memory[user_id] = []
+    response = requests.post(GEMINI_API_URL, params=params, headers=headers, data=json.dumps(data))
 
-    # プロンプトを作成
-    prompt = f"""あなたは神秘的な占い師です。ユーザーが占い結果について質問をしています。
-    霊的で不思議な雰囲気を持った占い師のキャラで答えてください。
+    if response.status_code == 200:
+        result = response.json()
+        try:
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError):
+            return "エラー: APIのレスポンス解析に失敗しました。"
+    else:
+        return f"エラー: APIリクエスト失敗 ({response.status_code})"
 
-    【過去の会話】\n""" + "\n".join(conversation_memory[user_id]) + f"""
-    
-    ユーザー: {user_input}
-    
-    あなたの返信:"""
+# 送信する占いメッセージを生成
+def create_fortune_message():
+    prompt = "今日の運勢を占ってください。"
+    message = generate_gemini_text(prompt)
+    return f"🌟 今日の運勢 🌟\n\n{message}\n\n#占い #今日の運勢"
 
-    # Gemini API でテキスト生成
-    model = genai.GenerativeModel("gemini-pro")
-    response = model.generate_content(prompt)
-    reply = response.text
+# Twitterに投稿
+def post_to_twitter():
+    tweet = create_fortune_message()
+    try:
+        api.update_status(tweet)
+        print("✅ ツイート成功！")
+    except Exception as e:
+        print(f"⚠️ ツイート失敗: {e}")
 
-    # 会話履歴を更新
-    conversation_memory[user_id].append(f"ユーザー: {user_input}")
-    conversation_memory[user_id].append(f"占い師: {reply}")
+# 定期実行スケジュール（1時間ごとに投稿）
+schedule.every(1).hours.do(post_to_twitter)
 
-    # 履歴が長くなりすぎたら削除
-    if len(conversation_memory[user_id]) > 10:
-        conversation_memory[user_id] = conversation_memory[user_id][-10:]
+print("🚀 Botが起動しました！")
 
-    return reply
-
-# メンションに対して占いの質問や感想に返信
-def check_mentions():
-    mentions = api.mentions_timeline(count=5)
-    for mention in mentions:
-        tweet_text = mention.text
-        tweet_id = mention.id
-        username = mention.user.screen_name
-        user_id = mention.user.id_str  # ユーザーの一意なID
-
-        # Google Gemini API で占い師っぽい返信を生成
-        reply_text = gemini_fortune_reply(tweet_text, user_id)
-
-        # Twitterに返信
-        reply_status = f"@{username} {reply_text}"
-        api.update_status(status=reply_status, in_reply_to_status_id=tweet_id)
-        print(f"🔮 {username} に返信しました: {reply_text}")
-
-# DMの受信をチェックする関数
-def check_dms():
-    dms = api.list_direct_messages(count=5)
-    for dm in dms:
-        sender_id = dm.message_create["sender_id"]
-        text = dm.message_create["message_data"]["text"]
-
-        # Google Gemini API に相談
-        reply_text = gemini_fortune_reply(text, sender_id)
-        send_dm(sender_id, reply_text)
-
-# DMを送信する関数
-def send_dm(user_id, text):
-    api.send_direct_message(recipient_id=user_id, text=text)
-    print(f"📩 DM送信: {text}")
-
-# 60秒ごとにDMとリプライをチェック
 while True:
-    check_mentions()  # リプライのチェック
-    check_dms()  # DMのチェック
+    schedule.run_pending()
     time.sleep(60)
