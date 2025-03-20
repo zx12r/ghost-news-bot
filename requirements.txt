@@ -1,4 +1,4 @@
 tweepy
-google-generativeai
+google-generative-ai
 requests
 schedule
