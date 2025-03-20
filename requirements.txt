@@ -1,0 +1,1 @@
+"tweepy\ngoogle-generativeai\nrequests\nschedule" 
